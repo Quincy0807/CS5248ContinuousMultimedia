@@ -1,0 +1,485 @@
+package dash.activitiy;
+
+import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.pm.ApplicationInfo;
+import android.content.pm.PackageManager;
+import android.media.AudioManager;
+import android.media.MediaPlayer;
+import android.net.TrafficStats;
+import android.os.AsyncTask;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Message;
+import android.util.Log;
+import android.view.*;
+import android.widget.*;
+import dash.component.BlockingQueueWrapper;
+
+import java.text.DecimalFormat;
+import java.util.HashMap;
+import java.util.Timer;
+import java.util.TimerTask;
+import java.util.concurrent.BlockingQueue;
+
+import static android.view.SurfaceHolder.*;
+
+public class VideoPlayerActivity extends Activity implements Callback {
+    private static final int DISSMISS_CTLPANEL_TIM = 5 * 1000;
+    public static double CurrentTraffic;
+    private BlockingQueue<String> firstUrl= BlockingQueueWrapper.firstQueue;
+    private int UID;
+    DecimalFormat df=new DecimalFormat("#.00");
+    private long mStartRX = 0;
+    private long mStartTX = 0;
+
+    private String packetName = "dash.activitiy";
+    private MediaPlayer firstPlayer, nextMediaPlayer, cachePlayer, currentPlayer;
+    private SurfaceView surface;
+    private SurfaceHolder surfaceHolder;
+    private LinearLayout llplaycontrol, llloading;
+    private ImageButton playbtn;
+    private int tvCurtime ,tvTotaltime;
+    private TextView tvcurtime, tvtotaltime;
+    //private SeekBar videoseekbar;
+    private float duration = 2;
+    private boolean userpaused = false;
+    Timer mTimer = new Timer();
+    private Handler mmHandler = new Handler();
+    final Runnable hidectlpanel = new Runnable() {
+
+        @Override
+        public void run() {
+            llplaycontrol.setVisibility(View.INVISIBLE);
+        }
+    };
+    private BlockingQueue<String> blockingQueue = BlockingQueueWrapper.blockingQueue;
+    private AsyncTask<Void, String, Void> asyncTask;
+    String mpdPath;
+    //================================================================
+
+
+
+    //cache all the player in this hashmap
+    private HashMap<String, MediaPlayer> playersCache = new HashMap<String, MediaPlayer>();
+    //the index of current player which is played
+    private int currentVideoIndex=0;
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_video_player);
+        //this.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
+        mTimer.schedule(mTimerTask, 0, 1000);
+        mpdPath=getIntent().getExtras().getString("mpdPath");
+        initView();
+
+    }
+
+//releasing all the data source after destroying the surfaceview
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        if (firstPlayer != null) {
+            if (firstPlayer.isPlaying()) {
+                firstPlayer.stop();
+            }
+            firstPlayer.release();
+        }
+        if (nextMediaPlayer != null) {
+            if (nextMediaPlayer.isPlaying()) {
+                nextMediaPlayer.stop();
+            }
+            nextMediaPlayer.release();
+        }
+
+        if (currentPlayer != null) {
+            if (currentPlayer.isPlaying()) {
+                currentPlayer.stop();
+            }
+            currentPlayer.release();
+        }
+        currentPlayer = null;
+        blockingQueue.clear();
+        firstUrl.clear();
+        BlockingQueueWrapper.extractMPD.cancel(true);
+    }
+
+   //initial all the view
+    private void initView() {
+        surface = (SurfaceView) findViewById(R.id.surface);
+        //tvcurtime = (TextView) findViewById(R.id.tvcurtime);
+        tvtotaltime = (TextView) findViewById(R.id.tvtotaltime);
+        //videoseekbar = (SeekBar) findViewById(R.id.videoseekbar);
+        llloading = (LinearLayout) findViewById(R.id.llloading);
+        playbtn = (ImageButton) findViewById(R.id.playbtn);
+        llplaycontrol = (LinearLayout) findViewById(R.id.llplaycontrol);
+        //llplaycontrol.setVisibility(View.INVISIBLE);
+        //this.videoseekbar.setProgress(0);
+        //this.videoseekbar.setMax(100);
+        calTraffic();
+
+        //this.videoseekbar.setEnabled(false);
+        //this.videoseekbar
+        //        .setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+
+                 //   @Override
+                 //   public void onStopTrackingTouch(SeekBar seekbar) {
+//                        showLoading();
+//                        mediaPlayer.seekTo(seekPosition);
+//                        vdl.seekLoadVideo(seekPosition / 1000);
+//                        userpaused = false;
+//                        mHandler.postDelayed(hidectlpanel,
+//                                DISSMISS_CTLPANEL_TIM);
+                //    }
+
+//                    @Override
+//                    public void onStartTrackingTouch(SeekBar seekbar) {
+////                        mediaPlayer.pause();
+////                        userpaused = true;
+////                        mHandler.removeCallbacks(hidectlpanel);
+//                    }
+//
+//                    @Override
+//                    public void onProgressChanged(SeekBar seekbar, int i,
+//                                                  boolean flag) {
+////                        if (userpaused) {
+////                            seekPosition = i * mediaPlayer.getDuration()
+////                                    / seekbar.getMax();
+////                            tvcurtime.setText(transtimetostr(seekPosition));
+////                        }
+//                    }
+//                });
+
+
+        surface.setOnTouchListener(new View.OnTouchListener() {
+
+            @Override
+            public boolean onTouch(View v, MotionEvent event) {
+
+                if (event.getAction() == MotionEvent.ACTION_DOWN) {
+
+                    if (!llplaycontrol.isShown()) {
+                        Log.i("attention","in2");
+                        llplaycontrol.setVisibility(View.VISIBLE);
+                        Log.i("attention",String.valueOf(llplaycontrol.isShown()));
+                    }
+
+                    mHandler.removeCallbacks(hidectlpanel);
+
+                    return true;
+                } else if (event.getAction() == MotionEvent.ACTION_UP) {
+                    Log.i("attention","out");
+                    mHandler.postDelayed(hidectlpanel, DISSMISS_CTLPANEL_TIM);
+
+                    return true;
+                }
+
+                return false;
+            }
+        });
+        llplaycontrol.setOnTouchListener(new View.OnTouchListener() {
+            @Override
+            public boolean onTouch(View view, MotionEvent motionevent) {
+
+                if (motionevent.getAction() == MotionEvent.ACTION_DOWN) {
+                    Log.i("attention","in11");
+                    mHandler.removeCallbacks(hidectlpanel);
+
+                    return true;
+                } else if (motionevent.getAction() == MotionEvent.ACTION_UP) {
+                    Log.i("attention","in22");
+                    mHandler.postDelayed(hidectlpanel, DISSMISS_CTLPANEL_TIM);
+
+                    return true;
+                }
+
+                return false;
+            }
+        });
+        playbtn.setOnClickListener(new View.OnClickListener() {
+
+            @Override
+            public void onClick(View v) {
+//                if (!isready || isloading) {
+//                    return;
+//                }
+
+                if(firstPlayer!=null && firstPlayer.isPlaying()){
+                    firstPlayer.pause();
+                    userpaused = true;
+                    Log.i("PauseButton","Fpaused");
+                }else if(firstPlayer!=null){
+                    firstPlayer.start();
+                    userpaused = false;
+                    Log.i("PauseButton","Fstarted");
+                }
+                if (currentPlayer!=null && currentPlayer.isPlaying()) {
+                    Log.i("PauseButton","Cpaused");
+                    currentPlayer.pause();
+                    userpaused = true;
+                } else if(firstPlayer ==null){
+                    Log.i("PauseButton","CStart");
+                    currentPlayer.start();
+                    userpaused = false;
+                }
+            }
+        });
+
+        // SurfaceHolder control the surface view
+        surfaceHolder = surface.getHolder();
+        surfaceHolder.addCallback(this);
+
+
+    }
+
+    @Override
+    public void onBackPressed() {
+
+
+
+        //Log.d("blockQueue",blockingQueue.peek());
+        super.onBackPressed();
+    }
+
+
+    private final Handler mHandler = new Handler() {
+        @Override
+        public void handleMessage(Message msg) {
+
+            super.handleMessage(msg);
+        }
+    };
+
+    @Override
+    public void surfaceChanged(SurfaceHolder arg0, int arg1, int arg2, int arg3) {
+
+    }
+
+    @Override
+    public void surfaceCreated(SurfaceHolder arg0) {
+
+        initFirstPlayer();
+    }
+
+    @Override
+    public void surfaceDestroyed(SurfaceHolder arg0) {
+
+
+    }
+
+   //initial the first player
+    private void initFirstPlayer() {
+        firstPlayer = new MediaPlayer();
+        firstPlayer.setAudioStreamType(AudioManager.STREAM_MUSIC);
+        firstPlayer.setDisplay(surfaceHolder);
+
+        firstPlayer
+                .setOnCompletionListener(new MediaPlayer.OnCompletionListener() {
+                    @Override
+                    public void onCompletion(MediaPlayer mp) {
+                        onVideoPlayCompleted(mp);
+                    }
+                });
+
+        //set cache player to firstPlayer
+        cachePlayer = firstPlayer;
+        startPlayFirstVideo();
+        initNexttPlayer();
+
+
+
+    }
+
+    private void startPlayFirstVideo() {
+        try {
+
+            firstPlayer.reset();
+           // String s = blockingQueue.take();
+           // Log.d("testttt","ssss"+s);
+            Thread.sleep(5000);
+            Log.d("VideoofirstURL",firstUrl.peek());
+            firstPlayer.setDataSource(firstUrl.take());
+            Log.d("testtt","come in 2");
+            firstPlayer.prepare();
+
+            firstPlayer.start();
+            Log.d("testtt","come in 3");
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+  //open up a new thread to prepared video source in background
+    private void initNexttPlayer() {
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                int i = 0;
+                String url;
+                while(true){
+                    Log.d("Videoo","jump into initNexttPlayer");
+                    try {
+                        url = blockingQueue.take();
+                        if(url.equals("end")){
+                            Log.d("VideooEndAt",String.valueOf(i));
+                            break;
+                        }
+                        nextMediaPlayer = new MediaPlayer();
+                        nextMediaPlayer
+                                .setAudioStreamType(AudioManager.STREAM_MUSIC);
+
+                        nextMediaPlayer
+                                .setOnCompletionListener(new MediaPlayer.OnCompletionListener() {
+                                    @Override
+                                    public void onCompletion(MediaPlayer mp) {
+                                        firstPlayer = null;
+                                        onVideoPlayCompleted(mp);
+                                    }
+                                });
+
+                        try {
+                            Log.d("VideooRestUrl",i+url);
+                            nextMediaPlayer.setDataSource(url);
+                            nextMediaPlayer.prepare();
+                        } catch (Exception e) {
+                          
+                            e.printStackTrace();
+                        }
+                    } catch (InterruptedException e) {
+                        e.printStackTrace();
+                    }
+
+
+                    //set next mediaplayer
+                    //cachePlayer.setNextMediaPlayer(nextMediaPlayer);
+                    //set new cachePlayer
+                    cachePlayer = nextMediaPlayer;
+                    //put nextMediaPlayer in cache
+                    playersCache.put(String.valueOf(i), nextMediaPlayer);
+                    i++;
+                }
+                //for (int i = 1; i < VideoListQueue.size(); i++) {
+
+                for(String key : playersCache.keySet()){
+                    Log.d("VideooAllkeyInCache",key);
+                }
+                //}
+
+
+            }
+        }).start();
+    }
+
+
+
+    //when one video is complete, propare to play the next one
+    private void onVideoPlayCompleted(MediaPlayer mp) {
+        mp.setDisplay(null);
+        //get next player
+
+        currentPlayer = playersCache.get(String.valueOf(++currentVideoIndex));
+        if (currentPlayer != null) {
+            currentPlayer.setDisplay(surfaceHolder);
+            Log.d("currentVideo=",String.valueOf(currentVideoIndex));
+            //if(currentVideoIndex-1==4){
+            currentPlayer.start();
+            if(!currentPlayer.isPlaying()){
+                currentPlayer.setOnPreparedListener(new MediaPlayer.OnPreparedListener() {
+                    @Override
+                    public void onPrepared(MediaPlayer mp) {
+                        mp.start();
+                    }
+                });
+            }
+            //}
+        } else {
+            Toast.makeText(VideoPlayerActivity.this, "The End", Toast.LENGTH_SHORT)
+                    .show();
+        }
+    }
+
+
+
+    //trans (seconds) to visuable time
+//    private String transtimetostr(int time) {
+//
+//        int hour = time / (60 * 60);
+//        int minute = time / 60 % 60;
+//        int second = time % 60;
+//
+//        StringBuilder sb = new StringBuilder();
+//        sb.append(hour >= 10 ? hour : "0" + hour);
+//        sb.append(":");
+//        sb.append(minute >= 10 ? minute : "0" + minute);
+//        sb.append(":");
+//        sb.append(second >= 10 ? second : "0" + second);
+//
+//        return sb.toString();
+//    }
+  //control progress bar by timer.
+    TimerTask mTimerTask = new TimerTask() {
+        @Override
+        public void run() {
+            if(firstPlayer==null && currentPlayer == null)
+                //mTimer.cancel();
+                return;
+            if ( !(firstPlayer == null && currentPlayer == null)) {
+                handleProgress.sendEmptyMessage(0);
+            }
+        }
+    };
+
+    Handler handleProgress = new Handler() {
+        public void handleMessage(Message msg) {
+
+//            float position ;
+//
+//            if(firstPlayer!=null)
+//                position = duration*(float)firstPlayer.getCurrentPosition()/(float)firstPlayer.getDuration();
+//            else{
+//                position = duration*(float)currentPlayer.getCurrentPosition()/(float)currentPlayer.getDuration();
+//            }
+//            if (duration > 0) {
+//                float pos = videoseekbar.getMax() * (position+currentVideoIndex*duration) / (NumOfSeg*duration);
+//                tvcurtime.setText(transtimetostr((int)(position+currentVideoIndex*duration)));
+//                videoseekbar.setProgress((int) pos);
+//            }
+        };
+    };
+    private final Runnable mRunnable = new Runnable() {
+        public void run() {
+
+            double rxBytes = (TrafficStats.getUidRxBytes(UID) - mStartRX)/512;
+            double txBytes = (TrafficStats.getUidTxBytes(UID) - mStartTX )/512;
+            mStartRX = TrafficStats.getUidRxBytes(UID);
+            mStartTX = TrafficStats.getUidTxBytes(UID);
+            tvtotaltime.setText(df.format(rxBytes)+"Kb/s");
+            CurrentTraffic = Double.valueOf(df.format(rxBytes));
+            mHandler.postDelayed(mRunnable, 500);
+        }
+    };
+    //calculate current traffic
+    public void calTraffic(){
+        try {
+            PackageManager pm = getPackageManager();
+            ApplicationInfo ai = pm.getApplicationInfo(packetName, PackageManager.GET_ACTIVITIES);
+            UID = ai.uid;
+            //Toast.makeText(VideoPlayerActivity.this, Integer.toString(ai.uid,10), Toast.LENGTH_SHORT).show();
+        } catch (PackageManager.NameNotFoundException e) {
+            e.printStackTrace();
+        }
+
+        mStartRX = TrafficStats.getUidRxBytes(UID);
+        mStartTX = TrafficStats.getUidTxBytes(UID);
+        if (mStartRX == TrafficStats.UNSUPPORTED || mStartTX == TrafficStats.UNSUPPORTED) {
+            AlertDialog.Builder alert = new AlertDialog.Builder(this);
+            alert.setTitle("Uh Oh!");
+            alert.setMessage("Your device does not support traffic stat monitoring.");
+            alert.show();
+        } else {
+            mHandler.postDelayed(mRunnable, 500);
+        }
+    }
+
+}

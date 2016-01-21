@@ -1,0 +1,33 @@
+.movieItem:hover{
+    cursor: pointer;
+}
+
+body{
+    background-color:lightgray !important;
+}
+
+
+.row div {
+  margin-top: 30px;
+}
+
+@keyframes  fading{
+    from{
+        opacity: 1;
+    }
+    50%{
+        opacity: 0.2;
+    }
+    to{
+        opacity: 1;
+    }
+
+}
+
+
+.head{
+    -webkit-animation: fading 5s ease-in-out infinite;
+    -o-animation: fading 5s ease-in-out infinite;
+    animation: fading 5s ease-in-out infinite;
+    
+}
