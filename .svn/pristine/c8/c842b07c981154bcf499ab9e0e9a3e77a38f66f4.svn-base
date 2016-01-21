@@ -1,0 +1,110 @@
+package dash.component;
+
+import dash.view.CaptureSurfaceView;
+import io.kickflip.sdk.av.CameraEncoder;
+import io.kickflip.sdk.av.FullFrameRect;
+import io.kickflip.sdk.av.MicrophoneEncoder;
+import io.kickflip.sdk.av.SessionConfig;
+
+import java.io.IOException;
+
+/**
+ * Created by Quincy on 15/10/19.
+ */
+public class CaptureRecorder {
+    protected CameraEncoder mCamEncoder;
+    protected MicrophoneEncoder mMicEncoder;
+    private CaptureSurfaceView captureSurfaceView;
+    private boolean mIsRecording;
+    private boolean started = false;
+
+    public CaptureRecorder(SessionConfig config, CaptureSurfaceView captureSurfaceView) throws IOException {
+        this.captureSurfaceView = captureSurfaceView;
+        this.init(config);
+    }
+
+    private void init(SessionConfig config) throws IOException {
+        this.mCamEncoder = new CameraEncoder(config);
+        this.mMicEncoder = new MicrophoneEncoder(config);
+        this.mIsRecording = false;
+
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                while (mCamEncoder.getCamera() == null) {
+                }
+                mCamEncoder.getCamera().setDisplayOrientation(90);
+
+            }
+        }).start();
+    }
+
+    public void setPreviewDisplay(CaptureSurfaceView display) {
+        this.mCamEncoder.setPreviewDisplay(display);
+    }
+
+    public void applyFilter(int filter) {
+        this.mCamEncoder.applyFilter(filter);
+    }
+
+    public void requestOtherCamera() {
+        this.mCamEncoder.requestOtherCamera();
+    }
+
+    public void requestCamera(int camera) {
+        this.mCamEncoder.requestCamera(camera);
+    }
+
+    public void toggleFlash() {
+        this.mCamEncoder.toggleFlashMode();
+    }
+
+    public void adjustVideoBitrate(int targetBitRate) {
+        this.mCamEncoder.adjustBitrate(targetBitRate);
+    }
+
+    public void signalVerticalVideo(FullFrameRect.SCREEN_ROTATION orientation) {
+        this.mCamEncoder.signalVerticalVideo(orientation);
+    }
+
+    public void startRecording() {
+        this.mIsRecording = true;
+        this.started = true;
+        this.mMicEncoder.startRecording();
+        this.mCamEncoder.startRecording();
+    }
+
+    public boolean isRecording() {
+        return this.mIsRecording;
+    }
+
+    public void stopRecording() {
+        this.mIsRecording = false;
+        this.mMicEncoder.stopRecording();
+        this.mCamEncoder.stopRecording();
+    }
+
+    public void reset(SessionConfig config) throws IOException {
+        this.mCamEncoder.reset(config);
+        this.mMicEncoder.reset(config);
+        this.mIsRecording = false;
+    }
+
+    public void release() {
+        if (started) {
+            this.mCamEncoder.release();
+        } else {
+            this.mCamEncoder.release();
+            this.mCamEncoder.getCamera().release();
+
+        }
+    }
+
+    public void onHostActivityPaused() {
+        this.mCamEncoder.onHostActivityPaused();
+    }
+
+    public void onHostActivityResumed() {
+        this.mCamEncoder.onHostActivityResumed();
+    }
+}

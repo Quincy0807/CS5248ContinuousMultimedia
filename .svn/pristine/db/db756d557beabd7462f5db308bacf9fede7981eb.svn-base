@@ -1,0 +1,346 @@
+package dash.asyntask;
+
+import android.app.Activity;
+import android.content.Context;
+import android.content.SharedPreferences;
+import android.os.AsyncTask;
+import android.widget.ProgressBar;
+import android.widget.Toast;
+import com.coremedia.iso.boxes.Container;
+import com.googlecode.mp4parser.authoring.Movie;
+import com.googlecode.mp4parser.authoring.Track;
+import com.googlecode.mp4parser.authoring.builder.DefaultMp4Builder;
+import com.googlecode.mp4parser.authoring.container.mp4.MovieCreator;
+import com.googlecode.mp4parser.authoring.tracks.CroppedTrack;
+import dash.adapter.LocalVideoAdapter;
+import dash.network.ExchangeData;
+import dash.network.ExchangeDataState;
+import dash.network.NetworkConnection;
+
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.FilenameFilter;
+import java.io.IOException;
+import java.nio.channels.FileChannel;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+/**
+ * Created by Quincy on 15/9/29.
+ */
+public class SegmentProgressBarUpdateAsyncTask extends AsyncTask<Void, String, Void> {
+    private String filePath;
+    private Context context;
+    private Movie movie;
+    private List<Track> tracks;
+    private double currentSegmentEnd;
+    private double movieDuration;
+    private int movieIndex;
+    private int segmentIndex;
+    private String movieName;
+    private int segmentNumber;
+    private ProgressBar progressBar;
+    private int pos;
+    private LocalVideoAdapter localVideoAdapter;
+    private boolean isReady;
+    private final int timeSpinning=2;
+
+    public SegmentProgressBarUpdateAsyncTask(String filePath, Context context, ProgressBar progressBar, int pos, LocalVideoAdapter localVideoAdapter) {
+        this.filePath = filePath;
+        this.context = context;
+        this.progressBar = progressBar;
+        this.pos = pos;
+        this.localVideoAdapter = localVideoAdapter;
+        segmentIndex = 0;
+        isReady = false;
+    }
+
+    @Override
+    protected void onPreExecute() {
+        try {
+            movie = MovieCreator.build(filePath);
+            movieName = filePath.substring(filePath.lastIndexOf("/") + 1);
+            tracks = movie.getTracks();
+            movieDuration = calculateLength(tracks.get(0));
+            segmentNumber = calculateSegmentNumber(tracks.get(0));
+            isReady = true;
+        } catch (IOException e) {
+            isReady = false;
+            publishProgress(e.getMessage());
+        }
+
+    }
+
+    @Override
+    protected Void doInBackground(Void... params) {
+        if (isReady) {
+            try {
+                final int continueNumber = getContinueNumberFromServer(movieName);
+                if (continueNumber == segmentNumber) {
+                    throw new InterruptedException("all segments have been uploaded");
+                }
+                if (continueNumber == 0) {
+                    progressBar.setProgress(0);
+                    segmentMovie();
+                }
+                List<SegmentProgressBarUpdateAsyncTask.SegmentWrapper> segments = allPendingSegments(continueNumber);
+                if (segments.size() != segmentNumber - continueNumber) {
+                    segmentMovie();
+                    segments = allPendingSegments(continueNumber);
+                }
+                for (SegmentProgressBarUpdateAsyncTask.SegmentWrapper segment : segments) {
+                    updateFileProgress(segment.getSegmentFile(), segment.getSegmentOrder(),segment.getSegmentDuration(), segment.getIsEnd());
+                }
+                progressBar.setProgress(100);
+                dealWithMovieAfterUploading(allPendingSegments(0));
+            } catch (IOException | InterruptedException e) {
+                publishProgress(e.getMessage());
+            }
+        }
+        return null;
+    }
+    @SuppressWarnings("all")
+    private List<SegmentProgressBarUpdateAsyncTask.SegmentWrapper> allPendingSegments(final int continueNumber) {
+        final List<SegmentProgressBarUpdateAsyncTask.SegmentWrapper> segments = new ArrayList<>();
+        File currentDirectory = new File(filePath.substring(0, filePath.lastIndexOf("/")));
+        final Pattern pattern = Pattern.compile(movieName + "_(\\d+)-([0-9]{1,13}(\\.[0-9]*)?)$");
+        currentDirectory.listFiles(new FilenameFilter() {
+            @Override
+            public boolean accept(File dir, String filename) {
+                Matcher matcher = pattern.matcher(filename);
+                if (matcher.find()) {
+                    int segmentOrder = Integer.parseInt(matcher.group(1));
+                    double segmentDuration = Double.parseDouble(matcher.group(2));
+                    if (segmentOrder >= continueNumber) {
+                        segments.add(new SegmentProgressBarUpdateAsyncTask.SegmentWrapper(new File(dir, filename), segmentOrder, segmentDuration));
+                    }
+                }
+                return false;
+            }
+        });
+        return segments;
+    }
+
+    private void updateFileProgress(File file, int segmentOrder,double segmentDuration, int isEnd) throws IOException {
+        int result = uploadFileAction(file, movieIndex, segmentOrder, segmentDuration,isEnd);
+        if (result != ExchangeDataState.RESPONSE_UPLOAD_SUCCESS.mappingInt()) {
+            throw new IOException("upload segment file to server failed");
+        } else {
+            int progressVal = progressBar.getProgress() + 100 / segmentNumber;
+            progressBar.setProgress(progressVal);
+            setProgressValInPreference(progressVal);
+        }
+    }
+
+    @Override
+    protected void onProgressUpdate(String... values) {
+        if (values[0].equals("deal-with")) {
+            localVideoAdapter.removeItem(pos);
+        } else {
+            Toast.makeText(context, "Upload Failed. Something is wrong while segmenting: " + values[0], Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private int getContinueNumberFromServer(String movieName) throws IOException {
+//        ExchangeData exchangeData = new NetworkConnection().makePost(NetworkConnection.SEGMENT_UPLOAD_URL)
+//                .addExchangeData(new ExchangeData().addMovieName(movieName)
+//                        .addMovieDuration(movieDuration).addExchangeDataState(ExchangeDataState.REQUEST_UPLOAD_NUMBER)
+//                        .addSegmentNumber(segmentNumber)).jsonResponse();
+//        movieIndex = exchangeData.getMovieIndex();
+//        if (exchangeData.getExchangeDataState() == ExchangeDataState.RESPONSE_UPLOAD_NUMBER.mappingInt()) {
+//            return exchangeData.getContinueNumber();
+//        }
+        return 0;
+    }
+
+
+    private int getSegmentIndex() {
+        int temp = segmentIndex;
+        segmentIndex++;
+        return temp;
+    }
+
+   private int calculateSegmentNumber(Track track) {
+       double temp = 0;
+       int number = 0;
+       while (temp + timeSpinning <= movieDuration) {
+           number++;
+           temp = correctTimeToSyncSample(track,temp+timeSpinning,true);
+       }
+       if (temp < movieDuration) {
+           number++;
+       }
+       return number;
+   }
+
+/** segment will be named as movieName_segmentOrder-segmentDuration*/
+    private void segmentMovie() throws IOException, InterruptedException {
+
+        while (currentSegmentEnd + timeSpinning <= movieDuration) {
+            doShorting(currentSegmentEnd + timeSpinning, getSegmentIndex());
+        }
+        if (currentSegmentEnd != movieDuration) {
+            movie.setTracks(new ArrayList<Track>());
+            shorteningAction(tracks, currentSegmentEnd, movieDuration);
+            String segmentFile = movieName + "_" + getSegmentIndex()+"-"+(movieDuration-currentSegmentEnd);
+            createMovieSegment(segmentFile);
+        }
+        segmentIndex=0;
+        currentSegmentEnd = 0;
+
+    }
+
+    private void doShorting(double endTime, int number) throws IOException, InterruptedException {
+        movie.setTracks(new ArrayList<Track>());
+        double syncEndTime = 0;
+        boolean isCorrected = false;
+        for (Track track : tracks) {
+            if (track.getSyncSamples() != null && track.getSyncSamples().length > 0) {
+                if (isCorrected) {
+                    throw new InternalError("Upload Failed.\nThe start time has already been corrected by another track");
+                }
+                syncEndTime = correctTimeToSyncSample(track, endTime, true);
+                isCorrected = true;
+            }
+        }
+        shorteningAction(tracks, currentSegmentEnd, syncEndTime);
+        currentSegmentEnd = syncEndTime;
+        createMovieSegment(movieName + "_" + number+"-"+timeSpinning);
+    }
+
+    private double correctTimeToSyncSample(Track track, double cutTime, boolean next) {
+        double[] timeOfSyncSamples = new double[track.getSyncSamples().length];
+        long currentSample = 0;
+        double currentTime = 0;
+        for (int i = 0; i < track.getSampleDurations().length; i++) {
+            double delta = track.getSampleDurations()[i];
+            int currentSyncSampleIndex = Arrays.binarySearch(track.getSyncSamples(), currentSample + 1);
+            if (currentSyncSampleIndex >= 0) {
+                timeOfSyncSamples[currentSyncSampleIndex] = currentTime;
+            }
+            currentTime += delta / track.getTrackMetaData().getTimescale();
+            currentSample++;
+        }
+        double previous = 0;
+        for (double timeOfSyncSample : timeOfSyncSamples) {
+            if (timeOfSyncSample > cutTime) {
+                if (next) {
+                    return timeOfSyncSample;
+                } else {
+                    return previous;
+                }
+            }
+            previous = timeOfSyncSample;
+        }
+        return timeOfSyncSamples[timeOfSyncSamples.length - 1];
+    }
+
+    @SuppressWarnings("all")
+    private void shorteningAction(List<Track> tracks, double syncStartTime, double syncEndTime) {
+        for (Track track : tracks) {
+            long currentSample = 0;
+            double currentTime = 0;
+            double lastTime = -1;
+            long startSample = -1;
+            long endSample = -1;
+            for (int i = 0; i < track.getSampleDurations().length; i++) {
+                double delta = track.getSampleDurations()[i];
+                if (currentTime > lastTime && currentTime <= syncStartTime) {
+                    startSample = currentSample;
+                }
+                if (currentTime > lastTime && currentTime <= syncEndTime) {
+                    endSample = currentSample;
+                }
+                lastTime = currentTime;
+                currentTime += delta / track.getTrackMetaData().getTimescale();
+                currentSample++;
+            }
+            movie.addTrack(new CroppedTrack(track, startSample, endSample));
+        }
+    }
+
+    private void createMovieSegment(String segmentName) throws IOException, InterruptedException {
+        Container container = new DefaultMp4Builder().build(movie);
+        File segment = new File(filePath.substring(0, filePath.lastIndexOf("/")) + File.separator + segmentName);
+        FileOutputStream fos = new FileOutputStream(segment);
+        FileChannel fc = fos.getChannel();
+        container.writeContainer(fc);
+        fc.close();
+        fos.close();
+    }
+
+    private double calculateLength(Track track) {
+        long sum = 0;
+        for (long l : track.getSampleDurations()) {
+            sum += l;
+        }
+        return ((double) sum) / track.getTrackMetaData().getTimescale();
+    }
+
+    private int uploadFileAction(File segment, int movieIndex, int segmentOrder,double segmentDuration, int isEnd) throws IOException {
+//        return
+//                new NetworkConnection()
+//                        .makePost(NetworkConnection.SEGMENT_UPLOAD_URL)
+//                        .addFileBody(segment)
+//                        .addExchangeData(new ExchangeData()
+////                                .addMovieIndex(movieIndex)
+//                                .addSegmentName(segment.getName().substring(0,segment.getName().lastIndexOf("-")))
+//                                .addSegmentOrder(segmentOrder)
+//                                .addExchangeDataState(ExchangeDataState.REQUEST_TO_UPLOAD)
+//                                .addSegmentDuration(segmentDuration)
+//                                .addIsEnd(isEnd))
+//                        .jsonResponse().getExchangeDataState();
+        return 3;
+    }
+
+    private void setProgressValInPreference(int progressVal) {
+        SharedPreferences sharedPreferences = ((Activity) context).getPreferences(Context.MODE_PRIVATE);
+        sharedPreferences.edit().putInt(filePath, progressVal).apply();
+    }
+
+    private void dealWithMovieAfterUploading(List<SegmentProgressBarUpdateAsyncTask.SegmentWrapper> segments) {
+        ((Activity) context).getPreferences(Context.MODE_PRIVATE).edit().remove(filePath).apply();
+        for (SegmentProgressBarUpdateAsyncTask.SegmentWrapper segment : segments) {
+            segment.getSegmentFile().delete();
+        }
+        new File(filePath).renameTo(new File(filePath + "_bk"));
+        publishProgress("deal-with");
+    }
+
+    private class SegmentWrapper {
+        private int segmentOrder;
+        private File segmentFile;
+        private double segmentDuration;
+        private int isEnd;
+
+        public double getSegmentDuration() {
+            return segmentDuration;
+        }
+
+        public SegmentWrapper(File segmentFile, int segmentOrder,double segmentDuration) {
+            this.segmentFile = segmentFile;
+            this.segmentOrder = segmentOrder;
+            this.segmentDuration = segmentDuration;
+            if (segmentOrder == segmentNumber-1) {
+                isEnd = 1;
+            } else {
+                isEnd = 0;
+            }
+        }
+
+        public File getSegmentFile() {
+            return segmentFile;
+        }
+
+        public int getSegmentOrder() {
+            return segmentOrder;
+        }
+
+        public int getIsEnd() {
+            return isEnd;
+        }
+    }
+}

@@ -1,0 +1,18 @@
+<resources>
+    <string name="app_name">MultiMediaDash</string>
+
+    <string name="captureButton">Capture!</string>
+    <string name="ServerViewerButton">Video</string>
+    <string name="title_main_activity">Client</string>
+    <string name="title_capture_activity">CaptureCamera</string>
+
+    <string name="cameraCaptureStart">Start</string>
+    <string name="action_settings">Settings</string>
+    <string name="uploadButton">upload</string>
+    <string name="title_viewer_activity">ServerVideo</string>
+    <string name="title_activity_test_audio">TestAudio</string>
+
+    <string name="hello_world">Hello world!</string>
+    <string name="title_activity_test_capture">TestCaptureActivity</string>
+
+</resources>

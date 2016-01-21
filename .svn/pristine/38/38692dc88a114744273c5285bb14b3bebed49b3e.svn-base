@@ -1,0 +1,23 @@
+package dash.listener;
+
+import android.content.Context;
+import android.view.View;
+import dash.asyntask.ExtractMPDTask;
+
+/**
+ * Created by Quincy on 15/10/12.
+ */
+public class RemoteWatchListener implements View.OnClickListener {
+    private String mpdPath;
+    private Context context;
+    public RemoteWatchListener(String mediaPath, Context context) {
+        this.mpdPath = mediaPath;
+        this.context = context;
+    }
+
+    @Override
+    public void onClick(View v) {
+        new ExtractMPDTask(mpdPath, context).execute();
+    }
+}
+

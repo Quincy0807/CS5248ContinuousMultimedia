@@ -1,0 +1,43 @@
+package dash.asyntask;
+
+import android.content.Context;
+import android.os.AsyncTask;
+import android.widget.Toast;
+import dash.Bean.BandwidthAdaptionInfoBean;
+import dash.component.XMLParser;
+import org.xmlpull.v1.XmlPullParserException;
+
+import java.io.IOException;
+import java.util.Map;
+
+/**
+ * Created by Quincy on 15/10/19.
+ */
+public class ExtractMPDTask extends AsyncTask<Void, String, Void> {
+    private String mpdURL;
+    private Context context;
+    private Map<String,BandwidthAdaptionInfoBean> map;
+
+    public ExtractMPDTask(String mpdURL, Context context) {
+        this.mpdURL = mpdURL;
+        this.context = context;
+    }
+
+    @Override
+    protected void onProgressUpdate(String... values) {
+        if (!values[0].equals("OK")) {
+            Toast.makeText(context, "Failed to extract MPD file", Toast.LENGTH_LONG).show();
+        }
+    }
+
+    @Override
+    protected Void doInBackground(Void... params) {
+        try {
+            map = new XMLParser(mpdURL).parser();
+            publishProgress("OK");
+        } catch (IOException | XmlPullParserException e) {
+            publishProgress("Failed");
+        }
+        return null;
+    }
+}

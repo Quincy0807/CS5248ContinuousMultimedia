@@ -1,0 +1,139 @@
+package dash.component;
+
+import android.content.Context;
+import android.media.MediaCodec;
+import android.media.MediaFormat;
+import android.media.MediaMuxer;
+import io.kickflip.sdk.av.Muxer;
+
+import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * Created by Quincy on 15/10/18.
+ */
+public class MuxerWrapper extends Muxer {
+    private String currentDirectory;
+    private String currentOutputPath;
+    private Context context;
+    private long startTime;
+    private int index = 0;
+    private List<MediaFormat> mediaFormats;
+    private boolean needSync = false;
+
+    private MediaMuxer mMuxer;
+    private boolean mStarted;
+
+    private MuxerWrapper(String outputFile, Context context) {
+        super(outputFile, FORMAT.MPEG4);
+        currentDirectory = outputFile;
+        this.context = context;
+        try {
+            this.mMuxer = new MediaMuxer(generateNextOutputPath(), 0);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        this.mStarted = false;
+        mediaFormats = new ArrayList<>();
+    }
+
+    private synchronized String generateNextOutputPath() {
+        currentOutputPath = currentDirectory + "/test-" + index + ".mp4";
+        index++;
+        return currentOutputPath;
+    }
+
+    public static MuxerWrapper create(String outputFile, Context context) {
+        return new MuxerWrapper(outputFile, context);
+    }
+
+    public int addTrack(MediaFormat trackFormat) {
+        super.addTrack(trackFormat);
+        if (this.mStarted) {
+            throw new RuntimeException("format changed twice");
+        } else {
+            int track = this.mMuxer.addTrack(trackFormat);
+            mediaFormats.add(trackFormat);
+            if (this.allTracksAdded()) {
+                this.start();
+            }
+
+            return track;
+        }
+    }
+
+    protected void start() {
+        this.mMuxer.start();
+        startTime = System.currentTimeMillis();
+        this.mStarted = true;
+    }
+
+    protected void stop() {
+        this.mMuxer.stop();
+        this.mStarted = false;
+    }
+
+    public void release() {
+        super.release();
+        this.mMuxer.release();
+    }
+
+    public boolean isStarted() {
+        return this.mStarted;
+    }
+
+
+    public void writeSampleData(MediaCodec encoder, int trackIndex, int bufferIndex, ByteBuffer encodedData, MediaCodec.BufferInfo bufferInfo) {
+        long currentTime = System.currentTimeMillis();
+        if (currentTime - startTime > 3000 && mStarted) {
+            needSync = true;
+        }
+        if (mStarted && needSync && (bufferInfo.flags & MediaCodec.BUFFER_FLAG_SYNC_FRAME) == 1) {
+            needSync = false;
+            mMuxer.stop();
+            mMuxer.release();
+            uploadSegment(false);
+            try {
+                this.mMuxer = new MediaMuxer(generateNextOutputPath(), 0);
+                for (MediaFormat mediaFormat : mediaFormats) {
+                    this.mMuxer.addTrack(mediaFormat);
+                }
+                this.mMuxer.start();
+                startTime = currentTime;
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+        super.writeSampleData(encoder, trackIndex, bufferIndex, encodedData, bufferInfo);
+        if ((bufferInfo.flags & 2) != 0) {
+            encoder.releaseOutputBuffer(bufferIndex, false);
+        } else if (bufferInfo.size == 0) {
+            encoder.releaseOutputBuffer(bufferIndex, false);
+        } else if (!this.mStarted) {
+            encoder.releaseOutputBuffer(bufferIndex, false);
+        } else {
+            bufferInfo.presentationTimeUs = this.getNextRelativePts(bufferInfo.presentationTimeUs, trackIndex);
+            this.mMuxer.writeSampleData(trackIndex, encodedData, bufferInfo);
+            encoder.releaseOutputBuffer(bufferIndex, false);
+            if (this.allTracksFinished()) {
+                this.stop();
+            }
+        }
+        if ((bufferInfo.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) !=0) {
+            uploadSegment(true);
+        }
+    }
+
+    public void forceStop() {
+        this.stop();
+    }
+
+    private void uploadSegment(boolean isEnd) {
+//        Message message = Message.obtain();
+//        message.obj = currentOutputPath;
+//        new UploadSegmentAsynTask(currentOutputPath, context, isEnd).executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
+//    }
+    }
+}
